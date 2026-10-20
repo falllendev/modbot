@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ModBot</title>
+<style>
+  :root{--bg:#0f1115;--card:#171a21;--line:#272c36;--text:#e6e8ee;--mute:#8b93a3;--accent:#5b8cff;--bad:#ff5b6b;--ok:#4ade80}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,sans-serif}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--line)}
+  h1{font-size:18px;margin:0}
+  main{max-width:1000px;margin:0 auto;padding:20px;display:grid;gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .card h2{margin:0 0 10px;font-size:15px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+  input[type=text],input[type=number],textarea,select{background:#0f1218;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 9px;font:inherit}
+  input[type=text]{flex:1;min-width:120px}
+  input[type=number]{width:80px}
+  textarea{width:100%;min-height:60px}
+  button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:8px 14px;font:inherit;cursor:pointer}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+  button.bad{background:var(--bad)}
+  button:disabled{opacity:.5;cursor:default}
+  label{color:var(--mute);display:flex;align-items:center;gap:6px}
+  .mute{color:var(--mute)}
+  .pill{padding:2px 8px;border-radius:99px;font-size:12px;border:1px solid var(--line)}
+  .on{color:var(--ok);border-color:var(--ok)}
+  #log{height:260px;overflow:auto;background:#0b0d11;border-radius:8px;padding:10px;font:12px/1.5 ui-monospace,monospace}
+  #log div{white-space:pre-wrap}
+  .err{color:var(--bad)} .act{color:var(--accent)} .msg{color:var(--mute)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  details summary{cursor:pointer;color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🛡️ ModBot</h1>
+  <div class="row" style="margin:0">
+    <span id="quota" class="pill mute">quota ~0 / 10000</span>
+    <span id="status" class="pill mute">stopped</span>
+  </div>
+</header>
+
+<main>
+  <div class="card">
+    <h2>1. Connect</h2>
+    <details style="margin-bottom:10px"><summary>First-time setup (one time, free)</summary>
+      <ol class="mute">
+        <li>Go to <b>console.cloud.google.com</b> → create a project.</li>
+        <li>APIs &amp; Services → Library → enable <b>YouTube Data API v3</b>.</li>
+        <li>OAuth consent screen → External → add yourself under <b>Test users</b>.</li>
+        <li>Credentials → Create → <b>OAuth client ID</b> → Web application. Add your GitHub Pages URL (e.g. <code>https://USERNAME.github.io</code>) under <b>Authorized JavaScript origins</b>.</li>
+        <li>Paste the Client ID below.</li>
+      </ol>
+    </details>
+    <div class="row">
+      <input type="text" id="clientId" placeholder="Google OAuth Client ID">
+      <button id="signin">Sign in with Google</button>
+    </div>
+    <div class="row">
+      <input type="text" id="videoId" placeholder="Live stream URL or video ID">
+      <button id="start">Start bot</button>
+      <button id="stop" class="ghost" disabled>Stop</button>
+    </div>
+    <div class="row">
+      <label>Prefix <input type="text" id="prefix" style="width:50px;flex:none"></label>
+      <label>Min poll (sec) <input type="number" id="minPoll" min="3"></label>
+      <label><input type="checkbox" id="dryRun"> Dry run (log actions, don't do them)</label>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>Commands</h2>
+      <div class="mute" style="margin-bottom:8px">Use <code>{user}</code> and <code>{args}</code> in replies. Cooldown in seconds.</div>
+      <div id="cmds"></div>
+      <button class="ghost" id="addCmd">+ Add command</button>
+    </div>
+    <div class="card">
+      <h2>Timed messages</h2>
+      <div class="mute" style="margin-bottom:8px">Sends every N minutes, only if at least M chat messages came in since the last one.</div>
+      <div id="timers"></div>
+      <button class="ghost" id="addTimer">+ Add timer</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Filters <span class="mute">(mods &amp; the owner are always exempt)</span></h2>
+    <div class="row">
+      <label><input type="checkbox" id="fLinks"> Block links</label>
+      <label><input type="checkbox" id="fCaps"> Block caps spam</label>
+      <label>min length <input type="number" id="fCapsMin"></label>
+      <label>caps % <input type="number" id="fCapsPct"></label>
+    </div>
+    <div class="row"><label style="width:100%">Banned words/phrases (one per line)</label>
+      <textarea id="fWords"></textarea></div>
+    <div class="row">
+      <label>Action
+        <select id="fAction"><option value="delete">Delete message</option><option value="timeout">Delete + timeout</option></select>
+      </label>
+      <label>Timeout seconds <input type="number" id="fTimeout"></label>
+      <label>Permit links from: <input type="text" id="fPermit" placeholder="youtube.com, twitter.com" style="min-width:220px"></label>
+    </div>
+    <div class="mute">Heads up: deleting costs ~50 quota units, timeouts ~200 more. See the quota counter up top.</div>
+  </div>
+
+  <div class="card">
+    <h2>Log</h2>
+    <div id="log"></div>
+  </div>
+</main>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+const $ = id => document.getElementById(id);
+const KEY = 'modbot-config-v1';
+const defaults = {
+  clientId:'', videoId:'', prefix:'!', minPoll:6, dryRun:true,
+  commands:[{name:'discord', response:'Join the Discord! (edit me)', cooldown:30}],
+  timers:[],
+  filters:{links:true, caps:false, capsMin:12, capsPct:75, words:[], action:'delete', timeoutSec:10, permit:''}
+};
+let cfg = (() => { try { return Object.assign({}, defaults, JSON.parse(localStorage.getItem(KEY))); } catch { return structuredClone(defaults); } })();
+cfg.filters = Object.assign({}, defaults.filters, cfg.filters);
+const save = () => localStorage.setItem(KEY, JSON.stringify(cfg));
+
+// ---------- logging + quota ----------
+function log(text, cls=''){
+  const d = document.createElement('div'); d.className = cls;
+  d.textContent = new Date().toLocaleTimeString() + '  ' + text;
+  const el = $('log'); el.appendChild(d);
+  while (el.children.length > 400) el.removeChild(el.firstChild);
+  el.scrollTop = el.scrollHeight;
+}
+const qDay = () => new Date().toLocaleDateString('en-CA',{timeZone:'America/Los_Angeles'});
+function addQuota(n){
+  let q; try { q = JSON.parse(localStorage.getItem('modbot-quota')); } catch {}
+  if (!q || q.day !== qDay()) q = {day:qDay(), used:0};
+  q.used += n; localStorage.setItem('modbot-quota', JSON.stringify(q));
+  showQuota();
+}
+function showQuota(){
+  let q; try { q = JSON.parse(localStorage.getItem('modbot-quota')); } catch {}
+  const used = q && q.day === qDay() ? q.used : 0;
+  $('quota').textContent = `quota ~${used} / 10000`;
+  $('quota').style.color = used > 8000 ? 'var(--bad)' : '';
+}
+
+// ---------- auth + api ----------
+let token = null, tokenClient = null;
+function initAuth(){
+  if (!cfg.clientId) throw new Error('Paste your OAuth Client ID first');
+  if (!window.google || !google.accounts) throw new Error('Google sign-in script is still loading, try again');
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: cfg.clientId,
+    scope: 'https://www.googleapis.com/auth/youtube.force-ssl',
+    callback: () => {}
+  });
+}
+function getToken(silent){
+  return new Promise((res, rej) => {
+    if (!tokenClient) initAuth();
+    tokenClient.callback = r => r.error ? rej(new Error(r.error)) : (token = r.access_token, res());
+    tokenClient.error_callback = e => rej(new Error(e.type || 'auth error'));
+    tokenClient.requestAccessToken({prompt: silent ? '' : 'consent'});
+  });
+}
+async function api(path, opts={}, retry=true){
+  const r = await fetch('https://www.googleapis.com/youtube/v3/' + path, {
+    ...opts, headers:{Authorization:'Bearer ' + token, 'Content-Type':'application/json'}
+  });
+  if (r.status === 401 && retry){ await getToken(true); return api(path, opts, false); }
+  if (!r.ok){
+    const e = await r.json().catch(() => ({}));
+    const err = new Error(e.error?.message || ('HTTP ' + r.status));
+    err.status = r.status; err.reason = e.error?.errors?.[0]?.reason; throw err;
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+// ---------- bot state ----------
+let running = false, chatId = null, pageToken = null, first = true, pollTimer = null, timerTick = null;
+let msgCount = 0, lastGlobal = 0;
+const seen = new Set(), sent = new Set(), lastUsed = {}, timerState = [];
+
+function parseVideoId(v){
+  v = (v||'').trim();
+  const m = v.match(/(?:v=|youtu\.be\/|\/live\/|\/embed\/)([\w-]{11})/);
+  if (m) return m[1];
+  return /^[\w-]{11}$/.test(v) ? v : null;
+}
+
+async function send(text){
+  text = text.slice(0, 200);
+  if (cfg.dryRun){ log('[dry run] would say: ' + text, 'act'); return; }
+  try {
+    const d = await api('liveChat/messages?part=snippet', {method:'POST', body: JSON.stringify({
+      snippet:{liveChatId:chatId, type:'textMessageEvent', textMessageDetails:{messageText:text}}
+    })});
+    addQuota(50);
+    if (d?.id) sent.add(d.id);
+    log('said: ' + text, 'act');
+  } catch(e){ log('send failed: ' + e.message, 'err'); }
+}
+async function del(id){
+  if (cfg.dryRun){ log('[dry run] would delete message', 'act'); return; }
+  try { await api('liveChat/messages?id=' + encodeURIComponent(id), {method:'DELETE'}); addQuota(50); }
+  catch(e){ log('delete failed: ' + e.message, 'err'); }
+}
+async function timeout(channelId, sec){
+  if (cfg.dryRun){ log(`[dry run] would timeout ${sec}s`, 'act'); return; }
+  try {
+    await api('liveChat/bans?part=snippet', {method:'POST', body: JSON.stringify({
+      snippet:{liveChatId:chatId, type:'temporary', banDurationSeconds:sec, bannedUserDetails:{channelId}}
+    })});
+    addQuota(200);
+  } catch(e){ log('timeout failed: ' + e.message, 'err'); }
+}
+
+function violates(text){
+  const f = cfg.filters, low = text.toLowerCase();
+  if (f.links){
+    const re = /(https?:\/\/|www\.)\S+|\b[a-z0-9-]+\.(com|net|org|io|gg|tv|ly|co|me|xyz|ru|info)\b\S*/gi;
+    const permits = (f.permit||'').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const hits = text.match(re) || [];
+    if (hits.some(h => !permits.some(p => h.toLowerCase().includes(p)))) return 'link';
+  }
+  if (f.caps){
+    const letters = text.replace(/[^a-z]/gi, '');
+    if (letters.length >= f.capsMin){
+      const up = letters.replace(/[^A-Z]/g, '').length;
+      if (up / letters.length * 100 >= f.capsPct) return 'caps';
+    }
+  }
+  for (const w of f.words){ if (w && low.includes(w.toLowerCase())) return 'banned word'; }
+  return null;
+}
+
+async function handle(m){
+  if (seen.has(m.id) || sent.has(m.id)) return;
+  seen.add(m.id);
+  if (m.snippet?.type !== 'textMessageEvent') return;
+  const text = m.snippet.textMessageDetails?.messageText || '';
+  const a = m.authorDetails || {};
+  msgCount++;
+  log(`${a.displayName}: ${text}`, 'msg');
+  const privileged = a.isChatOwner || a.isChatModerator;
+
+  if (!privileged){
+    const why = violates(text);
+    if (why){
+      log(`filter hit (${why}) from ${a.displayName}`, 'act');
+      await del(m.id);
+      if (cfg.filters.action === 'timeout') await timeout(a.channelId, cfg.filters.timeoutSec);
+      return;
+    }
+  }
+
+  if (text.startsWith(cfg.prefix)){
+    const [word, ...rest] = text.slice(cfg.prefix.length).trim().split(/\s+/);
+    const cmd = cfg.commands.find(c => c.name.toLowerCase() === (word||'').toLowerCase());
+    if (!cmd) return;
+    const now = Date.now();
+    if (now - (lastUsed[cmd.name] || 0) < cmd.cooldown * 1000) return;
+    if (now - lastGlobal < 4000) return;
+    lastUsed[cmd.name] = lastGlobal = now;
+    await send(cmd.response.replaceAll('{user}', a.displayName).replaceAll('{args}', rest.join(' ')));
+  }
+}
+
+async function tick(){
+  if (!running) return;
+  let wait = cfg.minPoll * 1000;
+  try {
+    const q = `liveChat/messages?liveChatId=${chatId}&part=snippet,authorDetails&maxResults=200` + (pageToken ? `&pageToken=${pageToken}` : '');
+    const d = await api(q); addQuota(5);
+    pageToken = d.nextPageToken;
+    wait = Math.max(d.pollingIntervalMillis || 5000, cfg.minPoll * 1000);
+    if (first){ d.items.forEach(m => seen.add(m.id)); first = false; log(`skipped ${d.items.length} old messages, watching new chat`); }
+    else for (const m of d.items) await handle(m);
+  } catch(e){
+    log('poll error: ' + e.message, 'err');
+    if (e.reason === 'liveChatEnded' || e.reason === 'liveChatNotFound'){ stop(); log('Chat ended, bot stopped.', 'err'); return; }
+    if (e.reason === 'quotaExceeded' || e.reason === 'rateLimitExceeded'){ stop(); log('Out of quota. Resets at midnight Pacific.', 'err'); return; }
+    wait = 15000;
+  }
+  pollTimer = setTimeout(tick, wait);
+}
+
+function timerLoop(){
+  const now = Date.now();
+  cfg.timers.forEach((t, i) => {
+    const s = timerState[i] ||= {last: now, count: msgCount};
+    if (!t.message || now - s.last < t.minutes * 60000) return;
+    if (msgCount - s.count < t.minMsgs) return;
+    s.last = now; s.count = msgCount;
+    send(t.message);
+  });
+}
+
+async function start(){
+  try {
+    if (!token) await getToken(false);
+    const id = parseVideoId(cfg.videoId);
+    if (!id) throw new Error('Could not read that video URL/ID');
+    const d = await api('videos?part=liveStreamingDetails&id=' + id); addQuota(1);
+    chatId = d.items?.[0]?.liveStreamingDetails?.activeLiveChatId;
+    if (!chatId) throw new Error('No active live chat on that video (is the stream live?)');
+  } catch(e){ log('start failed: ' + e.message, 'err'); return; }
+  running = true; first = true; pageToken = null; msgCount = 0; timerState.length = 0;
+  setUi(true);
+  log(cfg.dryRun ? 'Bot started in DRY RUN mode. Untick it when you are ready.' : 'Bot started, LIVE.', 'act');
+  tick(); timerTick = setInterval(timerLoop, 15000);
+}
+function stop(){
+  running = false; clearTimeout(pollTimer); clearInterval(timerTick); setUi(false); log('Bot stopped.');
+}
+function setUi(on){
+  $('start').disabled = on; $('stop').disabled = !on;
+  $('status').textContent = on ? 'running' : 'stopped';
+  $('status').className = 'pill ' + (on ? 'on' : 'mute');
+}
+
+// ---------- config UI ----------
+function bind(id, get, set, evt='input'){
+  const el = $(id); const v = get();
+  el.type === 'checkbox' ? el.checked = v : el.value = v;
+  el.addEventListener(evt, () => { set(el.type === 'checkbox' ? el.checked : el.value); save(); });
+}
+bind('clientId', () => cfg.clientId, v => { cfg.clientId = v.trim(); tokenClient = null; });
+bind('videoId', () => cfg.videoId, v => cfg.videoId = v);
+bind('prefix', () => cfg.prefix, v => cfg.prefix = v || '!');
+bind('minPoll', () => cfg.minPoll, v => cfg.minPoll = Math.max(3, +v || 6));
+bind('dryRun', () => cfg.dryRun, v => cfg.dryRun = v);
+bind('fLinks', () => cfg.filters.links, v => cfg.filters.links = v);
+bind('fCaps', () => cfg.filters.caps, v => cfg.filters.caps = v);
+bind('fCapsMin', () => cfg.filters.capsMin, v => cfg.filters.capsMin = +v || 12);
+bind('fCapsPct', () => cfg.filters.capsPct, v => cfg.filters.capsPct = +v || 75);
+bind('fWords', () => cfg.filters.words.join('\n'), v => cfg.filters.words = v.split('\n').map(s => s.trim()).filter(Boolean));
+bind('fAction', () => cfg.filters.action, v => cfg.filters.action = v, 'change');
+bind('fTimeout', () => cfg.filters.timeoutSec, v => cfg.filters.timeoutSec = Math.max(1, +v || 10));
+bind('fPermit', () => cfg.filters.permit, v => cfg.filters.permit = v);
+
+function field(parent, obj, key, ph, type='text', w){
+  const i = document.createElement('input'); i.type = type; i.placeholder = ph; i.value = obj[key];
+  if (w) { i.style.width = w; i.style.flex = 'none'; }
+  i.oninput = () => { obj[key] = type === 'number' ? (+i.value || 0) : i.value; save(); };
+  parent.appendChild(i); return i;
+}
+function xBtn(parent, fn){
+  const b = document.createElement('button'); b.className = 'ghost'; b.textContent = '✕'; b.onclick = fn; parent.appendChild(b);
+}
+function renderCmds(){
+  const box = $('cmds'); box.innerHTML = '';
+  cfg.commands.forEach((c, i) => {
+    const r = document.createElement('div'); r.className = 'row';
+    field(r, c, 'name', 'name', 'text', '90px');
+    field(r, c, 'response', 'response');
+    field(r, c, 'cooldown', 'cd', 'number', '60px');
+    xBtn(r, () => { cfg.commands.splice(i, 1); save(); renderCmds(); });
+    box.appendChild(r);
+  });
+}
+function renderTimers(){
+  const box = $('timers'); box.innerHTML = '';
+  cfg.timers.forEach((t, i) => {
+    const r = document.createElement('div'); r.className = 'row';
+    field(r, t, 'message', 'message');
+    field(r, t, 'minutes', 'min', 'number', '60px');
+    field(r, t, 'minMsgs', 'msgs', 'number', '60px');
+    xBtn(r, () => { cfg.timers.splice(i, 1); save(); renderTimers(); });
+    box.appendChild(r);
+  });
+}
+$('addCmd').onclick = () => { cfg.commands.push({name:'', response:'', cooldown:30}); save(); renderCmds(); };
+$('addTimer').onclick = () => { cfg.timers.push({message:'', minutes:15, minMsgs:5}); save(); renderTimers(); };
+$('signin').onclick = async () => { try { initAuth(); await getToken(false); log('Signed in.', 'act'); } catch(e){ log('sign-in failed: ' + e.message, 'err'); } };
+$('start').onclick = start;
+$('stop').onclick = stop;
+renderCmds(); renderTimers(); showQuota();
+log('Ready. Dry run is on by default, so nothing gets posted or deleted until you untick it.');
+</script>
+</body>
+</html>
